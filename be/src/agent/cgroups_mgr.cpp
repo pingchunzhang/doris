@@ -470,4 +470,5 @@ bool CgroupsMgr::is_file_exist(const std::string& file_path) {
     return is_file_exist(file_path.c_str());
 }
 
+// test
 } // namespace doris
