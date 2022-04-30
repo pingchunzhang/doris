@@ -307,6 +307,7 @@ private:
 
 std::ostream& operator<<(std::ostream& os, const TypeDescriptor& type);
 
+// test pipeline 3
 } // namespace doris
 
 #endif

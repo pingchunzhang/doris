@@ -505,6 +505,7 @@ private:
     for (RowBatch::Iterator _iter(_row_batch, _start_row_idx, _limit); !_iter.at_end(); \
          _iter.next())
 
+// test pipeline 2
 } // namespace doris
 
 #endif

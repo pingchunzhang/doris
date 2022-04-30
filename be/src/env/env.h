@@ -410,5 +410,5 @@ public:
     virtual Status size(uint64_t* size) const = 0;
     virtual const std::string& filename() const = 0;
 };
-
+// test pipeline 0419 21:48
 } // namespace doris

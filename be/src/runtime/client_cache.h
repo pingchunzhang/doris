@@ -294,6 +294,7 @@ class TExtDataSourceServiceClient;
 using ExtDataSourceServiceClientCache = ClientCache<TExtDataSourceServiceClient>;
 using ExtDataSourceServiceConnection = ClientConnection<TExtDataSourceServiceClient>;
 
+// test pipeline 1
 } // namespace doris
 
 #endif
