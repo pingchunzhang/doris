@@ -19,9 +19,7 @@ suite("st07_qcs_consistency") {
     def customBeConfig = [
         enable_evict_file_cache_in_advance : false,
         file_cache_enter_disk_resource_limit_mode_percent : 99,
-        file_cache_background_ttl_gc_interval_ms : 1000,
-        file_cache_background_ttl_info_update_interval_ms : 1000,
-        file_cache_background_tablet_id_flush_interval_ms : 1000
+        file_cache_background_ttl_gc_interval_ms : 1000
     ]
 
     setBeConfigTemporary(customBeConfig) {
@@ -33,6 +31,7 @@ suite("st07_qcs_consistency") {
         String tableName = "st07_qcs_tpl"
         def ddl = new File("""${context.file.parent}/../ddl/st07_qcs_consistency.sql""").text
                 .replace("\${TABLE_NAME}", tableName)
+        logger.info("st07 cluster=${validCluster}, table=${tableName}, ddl=${ddl}")
         sql ddl
 
         (0..<10).each { batch ->
@@ -56,11 +55,13 @@ suite("st07_qcs_consistency") {
         }
 
         sql """alter table ${tableName} add column c2 BIGINT default "0" """
+        logger.info("st07 schema change submitted for table ${tableName}")
 
         def waitSchemaChangeFinished = { String tbl, long timeoutMs = 300000L, long intervalMs = 5000L ->
             long start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < timeoutMs) {
                 def rows = sql """SHOW ALTER TABLE COLUMN WHERE TableName='${tbl}' ORDER BY CreateTime DESC LIMIT 1"""
+                logger.info("st07 schema change status rows for table ${tbl}: ${rows}")
                 if (rows.isEmpty()) {
                     sleep(intervalMs)
                     continue
@@ -80,17 +81,23 @@ suite("st07_qcs_consistency") {
 
         qt_q2 """select count(*) from ${tableName} where c2 = 0"""
 
+        def getTabletTypeRows = { Long tabletId ->
+            def rows = sql """select tablet_id, type from information_schema.file_cache_info where tablet_id=${tabletId} order by type"""
+            logger.info("st07 tablet cache rows, tabletId=${tabletId}, rows=${rows}")
+            return rows
+        }
+
         def waitNoMixedTypePerTablet = { List<Long> ids, long timeoutMs = 600000L, long intervalMs = 3000L ->
             long start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < timeoutMs) {
                 boolean allOk = true
                 for (Long tabletId in ids) {
-                    def rows = sql """select type from information_schema.file_cache_info where tablet_id=${tabletId}"""
+                    def rows = getTabletTypeRows.call(tabletId)
                     if (rows.isEmpty()) {
                         allOk = false
                         break
                     }
-                    def typeSet = rows.collect { it[0]?.toString()?.toLowerCase() }.toSet()
+                    def typeSet = rows.collect { it[1]?.toString()?.toLowerCase() }.toSet()
                     if (typeSet.size() > 1) {
                         allOk = false
                         break

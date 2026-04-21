@@ -31,10 +31,12 @@ suite("st06_warmup_ttl_type_assert") {
         def sourceCluster = clusters[0][0]
         def targetCluster = clusters[1][0]
         String tableName = "st06_warmup_ttl_tpl"
+        logger.info("st06 clusters: source=${sourceCluster}, target=${targetCluster}, table=${tableName}")
 
         sql """use @${sourceCluster};"""
         def ddl = new File("""${context.file.parent}/../ddl/st06_warmup_ttl_type_assert.sql""").text
                 .replace("\${TABLE_NAME}", tableName)
+        logger.info("st06 ddl: ${ddl}")
         sql ddl
 
         def values = (0..<200).collect { i -> "(${i}, 'warmup_tpl_${i}')" }.join(",")
@@ -49,11 +51,13 @@ suite("st06_warmup_ttl_type_assert") {
         def jobIdRows = sql """warm up cluster ${targetCluster} with table ${tableName};"""
         assertTrue(!jobIdRows.isEmpty())
         def jobId = jobIdRows[0][0]
+        logger.info("st06 warm up job submitted, jobId=${jobId}, rows=${jobIdRows}")
 
         def waitWarmUpJobFinished = { Object id, long timeoutMs = 600000L, long intervalMs = 5000L ->
             long start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < timeoutMs) {
                 def stateRows = sql """SHOW WARM UP JOB WHERE ID = ${id}"""
+                logger.info("st06 warm up job status rows, jobId=${id}, rows=${stateRows}")
                 if (stateRows.isEmpty()) {
                     sleep(intervalMs)
                     continue
@@ -76,6 +80,7 @@ suite("st06_warmup_ttl_type_assert") {
         def targetTablets = sql """show tablets from ${tableName}"""
         assertTrue(targetTablets.size() > 0, "No tablets found for table ${tableName} in target cluster ${targetCluster}")
         def targetTabletIds = targetTablets.collect { it[0] as Long }
+        logger.info("st06 tablets: source=${sourceTabletIds}, target=${targetTabletIds}")
         assertTrue(sourceTabletIds.size() == targetTabletIds.size(),
                 "Tablet size mismatch between source and target, source=${sourceTabletIds.size()}, target=${targetTabletIds.size()}")
 

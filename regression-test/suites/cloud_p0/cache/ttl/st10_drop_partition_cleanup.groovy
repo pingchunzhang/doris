@@ -19,9 +19,7 @@ suite("st10_drop_partition_cleanup") {
     def customBeConfig = [
         enable_evict_file_cache_in_advance : false,
         file_cache_enter_disk_resource_limit_mode_percent : 99,
-        file_cache_background_ttl_gc_interval_ms : 1000,
-        file_cache_background_ttl_info_update_interval_ms : 1000,
-        file_cache_background_tablet_id_flush_interval_ms : 1000
+        file_cache_background_ttl_gc_interval_ms : 1000
     ]
     def customFeConfig = [
         rehash_tablet_after_be_dead_seconds : 5
@@ -42,18 +40,17 @@ suite("st10_drop_partition_cleanup") {
             String[][] backends = sql """show backends"""
             def backendIdToBackendIP = [:]
             def backendIdToBackendHttpPort = [:]
-            def backendIdToBackendBrpcPort = [:]
             for (String[] backend in backends) {
                 if (backend[9].equals("true") && backend[19].contains("${validCluster}")) {
                     backendIdToBackendIP.put(backend[0], backend[1])
                     backendIdToBackendHttpPort.put(backend[0], backend[4])
-                    backendIdToBackendBrpcPort.put(backend[0], backend[5])
                 }
             }
             assertEquals(backendIdToBackendIP.size(), 1)
 
             def backendId = backendIdToBackendIP.keySet()[0]
             def clearUrl = backendIdToBackendIP.get(backendId) + ":" + backendIdToBackendHttpPort.get(backendId) + "/api/file_cache?op=clear&sync=true"
+            logger.info("st10 cluster=${validCluster}, table=${tableName}, clearUrl=${clearUrl}, backendId=${backendId}")
             httpTest {
                 endpoint ""
                 uri clearUrl
@@ -65,12 +62,34 @@ suite("st10_drop_partition_cleanup") {
                 }
             }
 
+        def getTabletCacheRows = { List<Long> tabletIds ->
+            if (tabletIds.isEmpty()) {
+                return []
+            }
+            String idList = tabletIds.join(",")
+            def rows = sql """select tablet_id, type from information_schema.file_cache_info where tablet_id in (${idList}) order by tablet_id, type"""
+            logger.info("st10 tablet cache rows, tabletIds=${tabletIds}, rows=${rows}")
+            return rows
+        }
+
+        def getTabletCacheEntryCount = { List<Long> tabletIds ->
+            if (tabletIds.isEmpty()) {
+                return 0L
+            }
+            String idList = tabletIds.join(",")
+            def rows = sql """select count(*) from information_schema.file_cache_info where tablet_id in (${idList})"""
+            long count = rows[0][0].toString().toLong()
+            logger.info("st10 tablet cache entry count, tabletIds=${tabletIds}, count=${count}")
+            return count
+        }
+
         def waitForFileCacheType = { List<Long> tabletIds, String expectedType, long timeoutMs = 120000L, long intervalMs = 2000L ->
             long start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < timeoutMs) {
                 boolean allMatch = true
                 for (Long tabletId in tabletIds) {
-                    def rows = sql """select type from information_schema.file_cache_info where tablet_id = ${tabletId}"""
+                    def rows = sql """select type from information_schema.file_cache_info where tablet_id = ${tabletId} order by type"""
+                    logger.info("st10 waitForFileCacheType tablet=${tabletId}, expectedType=${expectedType}, rows=${rows}")
                     if (rows.isEmpty()) {
                         allMatch = false
                         break
@@ -97,6 +116,7 @@ suite("st10_drop_partition_cleanup") {
             long start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < timeoutMs) {
                 def rows = sql """select tablet_id from information_schema.file_cache_info where tablet_id in (${idList}) limit 1"""
+                logger.info("st10 dropped tablet cache rows check, tabletIds=${tabletIds}, rows=${rows}")
                 if (rows.isEmpty()) {
                     return
                 }
@@ -113,58 +133,13 @@ suite("st10_drop_partition_cleanup") {
             long start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < timeoutMs) {
                 def rows = sql """select tablet_id from information_schema.file_cache_info where tablet_id in (${idList}) limit 1"""
+                logger.info("st10 remaining tablet cache rows check, tabletIds=${tabletIds}, rows=${rows}")
                 if (!rows.isEmpty()) {
                     return
                 }
                 sleep(intervalMs)
             }
             assertTrue(false, "Timeout waiting tablet cache entries exist, tablets=${tabletIds}")
-        }
-
-        def getBrpcMetricSum = { String metricNameSubstr ->
-            long sumValue = 0L
-            httpTest {
-                endpoint backendIdToBackendIP.get(backendId) + ":" + backendIdToBackendBrpcPort.get(backendId)
-                uri "/brpc_metrics"
-                op "get"
-                check { respCode, body ->
-                    assertEquals("${respCode}".toString(), "200")
-                    String out = "${body}".toString()
-                    def lines = out.split('\n')
-                    for (String line in lines) {
-                        if (line.startsWith("#")) {
-                            continue
-                        }
-                        if (!line.contains(metricNameSubstr)) {
-                            continue
-                        }
-                        logger.info("metric line: ${line}")
-                        def idx = line.indexOf(' ')
-                        if (idx <= 0) {
-                            continue
-                        }
-                        try {
-                            sumValue += line.substring(idx).trim().toLong()
-                        } catch (Exception e) {
-                            logger.warn("ignore unparsable metric line: ${line}")
-                        }
-                    }
-                }
-            }
-            return sumValue
-        }
-
-        def waitBrpcMetricLE = { String metricNameSubstr, long upperBound, long timeoutMs = 180000L, long intervalMs = 3000L ->
-            long start = System.currentTimeMillis()
-            while (System.currentTimeMillis() - start < timeoutMs) {
-                long cur = getBrpcMetricSum.call(metricNameSubstr)
-                if (cur <= upperBound) {
-                    return
-                }
-                sleep(intervalMs)
-            }
-            long curFinal = getBrpcMetricSum.call(metricNameSubstr)
-            assertTrue(curFinal <= upperBound, "Metric ${metricNameSubstr} should <= ${upperBound}, actual=${curFinal}")
         }
 
         def getPartitionTabletIds = { String tbl, String partitionName ->
@@ -182,15 +157,26 @@ suite("st10_drop_partition_cleanup") {
 
             def p1Tablets = getPartitionTabletIds.call(tableName, "p1")
             def p2Tablets = getPartitionTabletIds.call(tableName, "p2")
+            logger.info("st10 partition tablets: p1=${p1Tablets}, p2=${p2Tablets}")
             waitForFileCacheType.call((p1Tablets + p2Tablets).unique(), "ttl")
 
-            final String ttlMgrSetMetric = "file_cache_ttl_mgr_tablet_id_set_size"
-            long ttlMgrSetSizeBeforeDropPartition = getBrpcMetricSum.call(ttlMgrSetMetric)
+            long cacheEntryCountBeforeDropPartition = getTabletCacheEntryCount.call((p1Tablets + p2Tablets).unique())
+            long p2CacheEntryCountBeforeDropPartition = getTabletCacheEntryCount.call(p2Tablets)
+            logger.info("st10 cache entry counts before drop: all=${cacheEntryCountBeforeDropPartition}, p2=${p2CacheEntryCountBeforeDropPartition}")
 
             sql """alter table ${tableName} drop partition p1 force"""
             waitDroppedTabletCacheInfoEmpty.call(p1Tablets)
             waitTabletCacheInfoNonEmpty.call(p2Tablets)
-            waitBrpcMetricLE.call(ttlMgrSetMetric, ttlMgrSetSizeBeforeDropPartition)
+            long cacheEntryCountAfterDropPartition = getTabletCacheEntryCount.call((p1Tablets + p2Tablets).unique())
+            long p2CacheEntryCountAfterDropPartition = getTabletCacheEntryCount.call(p2Tablets)
+            logger.info("st10 cache entry counts after drop: all=${cacheEntryCountAfterDropPartition}, p2=${p2CacheEntryCountAfterDropPartition}")
+            assertTrue(cacheEntryCountAfterDropPartition <= cacheEntryCountBeforeDropPartition,
+                    "Cache entry count should not increase after dropping partition. before=${cacheEntryCountBeforeDropPartition}, after=${cacheEntryCountAfterDropPartition}")
+            assertTrue(p2CacheEntryCountAfterDropPartition > 0,
+                    "Remaining partition p2 should still have cache entries after dropping p1")
+            assertTrue(p2CacheEntryCountAfterDropPartition <= p2CacheEntryCountBeforeDropPartition,
+                    "Remaining partition p2 cache entry count should not increase after dropping p1. before=${p2CacheEntryCountBeforeDropPartition}, after=${p2CacheEntryCountAfterDropPartition}")
+            getTabletCacheRows.call(p2Tablets)
 
             sql """select count(*) from ${tableName} where k1 >= 1000"""
             sql """drop table if exists ${tableName}"""

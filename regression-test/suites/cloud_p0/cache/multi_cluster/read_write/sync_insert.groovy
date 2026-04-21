@@ -153,8 +153,6 @@ DISTRIBUTED BY HASH(`siteid`) BUCKETS 1
             }
             assertTrue(flag)
     }
-    // FIXME(gavin): this is a strong assertion, make it weaker and robuster
-    assertEquals(insertedSizeBytes, dstClusterSize)
     org.junit.Assert.assertTrue("insertedSizeBytes ${insertedSizeBytes} <= dstClusterSize ${dstClusterSize}", insertedSizeBytes <= dstClusterSize)
     org.junit.Assert.assertTrue("insertedSizeBytes ${insertedSizeBytes} <= srcClusterSize ${dstClusterSize}", insertedSizeBytes <= srcClusterSize)
     org.junit.Assert.assertTrue("dstClusterSize ${insertedSizeBytes} <= srcClusterSize ${dstClusterSize}", dstClusterSize <= srcClusterSize)

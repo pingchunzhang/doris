@@ -65,6 +65,23 @@ suite("alter_ttl_4") {
         }
     }
 
+    def getMetricSumFromBody = { body, metricSuffix ->
+        long sum = 0
+        def matchedLines = []
+        "${body}".toString().eachLine { line ->
+            if (!line.startsWith("#")) {
+                def parts = line.trim().split(/\s+/)
+                if (parts.size() >= 2 && parts[0].endsWith(metricSuffix)) {
+                    matchedLines.add(line.trim())
+                    sum += parts[1].toLong()
+                }
+            }
+        }
+        logger.info("metric suffix ${metricSuffix}, matched lines: ${matchedLines}, sum=${sum}")
+        assertTrue(!matchedLines.isEmpty(), "Metric suffix ${metricSuffix} not found in brpc_metrics")
+        return sum
+    }
+
     def s3BucketName = getS3BucketName()
     def s3WithProperties = """WITH S3 (
         |"AWS_ACCESS_KEY" = "${getS3AK()}",
@@ -140,20 +157,9 @@ suite("alter_ttl_4") {
     getMetricsMethod.call() {
         respCode, body ->
             assertEquals("${respCode}".toString(), "200")
-            String out = "${body}".toString()
-            def strs = out.split('\n')
-            Boolean flag2 = false;
-            for (String line in strs) {
-                if (line.contains("ttl_cache_size")) {
-                    if (line.startsWith("#")) {
-                        continue
-                    }
-                    def i = line.indexOf(' ')
-                    custom_ttl_size = line.substring(i).toLong()
-                    flag2 = true
-                }
-            }
-            assertTrue(flag2)
+            custom_ttl_size = getMetricSumFromBody(body, "file_cache_ttl_cache_size")
+            logger.info("baseline custom ttl cache size=${custom_ttl_size}")
+            assertTrue(custom_ttl_size > 0, "baseline custom ttl cache size should be > 0")
     }
     sleep(60000)
     // one customer table would take about 1.3GB, the total cache size is 20GB
@@ -200,20 +206,9 @@ suite("alter_ttl_4") {
     getMetricsMethod.call() {
         respCode, body ->
             assertEquals("${respCode}".toString(), "200")
-            String out = "${body}".toString()
-            def strs = out.split('\n')
-            Boolean flag1 = false;
-            for (String line in strs) {
-                if (line.contains("ttl_cache_size")) {
-                    if (line.startsWith("#")) {
-                        continue
-                    }
-                    def i = line.indexOf(' ')
-                    assertEquals(custom_ttl_size, line.substring(i).toLong())
-                    flag1 = true
-                }
-            }
-            assertTrue(flag1)
+            def currentTtlCacheSize = getMetricSumFromBody(body, "file_cache_ttl_cache_size")
+            logger.info("ttl cache size after alter ttl to 3600=${currentTtlCacheSize}, baseline=${custom_ttl_size}")
+            assertEquals(custom_ttl_size, currentTtlCacheSize)
     }
     }
 }

@@ -93,6 +93,23 @@ suite("test_ttl_max_int64") {
         }
     }
 
+    def getMetricSumFromBody = { body, metricSuffix ->
+        long sum = 0
+        def matchedLines = []
+        "${body}".toString().eachLine { line ->
+            if (!line.startsWith("#")) {
+                def parts = line.trim().split(/\s+/)
+                if (parts.size() >= 2 && parts[0].endsWith(metricSuffix)) {
+                    matchedLines.add(line.trim())
+                    sum += parts[1].toLong()
+                }
+            }
+        }
+        logger.info("metric suffix ${metricSuffix}, matched lines: ${matchedLines}, sum=${sum}")
+        assertTrue(!matchedLines.isEmpty(), "Metric suffix ${metricSuffix} not found in brpc_metrics")
+        return sum
+    }
+
     clearFileCache.call() {
         respCode, body -> {}
     }
@@ -103,20 +120,8 @@ suite("test_ttl_max_int64") {
     getMetricsMethod.call() {
         respCode, body ->
             assertEquals("${respCode}".toString(), "200")
-            String out = "${body}".toString()
-            def strs = out.split('\n')
-            Boolean flag1 = false;
-            for (String line in strs) {
-                if (flag1) break;
-                if (line.contains("ttl_cache_size")) {
-                    if (line.startsWith("#")) {
-                        continue
-                    }
-                    def i = line.indexOf(' ')
-                    assertTrue(line.substring(i).toLong() > 838860800)
-                    flag1 = true
-                }
-            }
-            assertTrue(flag1)
+            def ttlCacheSize = getMetricSumFromBody(body, "file_cache_ttl_cache_size")
+            logger.info("ttl cache size after max-int64 ttl load=${ttlCacheSize}")
+            assertTrue(ttlCacheSize > 838860800, "ttl cache size should be > 838860800, actual=${ttlCacheSize}")
     }
 }

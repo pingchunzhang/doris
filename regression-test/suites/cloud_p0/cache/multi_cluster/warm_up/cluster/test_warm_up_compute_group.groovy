@@ -91,6 +91,23 @@ suite("test_warm_up_compute_group") {
         }
     }
 
+    def getMetricSumFromBody = { body, metricSuffix ->
+        long sum = 0
+        def matchedLines = []
+        "${body}".toString().eachLine { line ->
+            if (!line.startsWith("#")) {
+                def parts = line.trim().split(/\s+/)
+                if (parts.size() >= 2 && parts[0].endsWith(metricSuffix)) {
+                    matchedLines.add(line.trim())
+                    sum += parts[1].toLong()
+                }
+            }
+        }
+        logger.info("metric suffix ${metricSuffix}, matched lines: ${matchedLines}, sum=${sum}")
+        assertTrue(!matchedLines.isEmpty(), "Metric suffix ${metricSuffix} not found in brpc_metrics")
+        return sum
+    }
+
     clearFileCache.call(ipList[0], httpPortList[0]);
     clearFileCache.call(ipList[1], httpPortList[1]);
 
@@ -177,41 +194,17 @@ suite("test_warm_up_compute_group") {
     getMetricsMethod.call(ipList[0], brpcPortList[0]) {
         respCode, body ->
             assertEquals("${respCode}".toString(), "200")
-            String out = "${body}".toString()
-            def strs = out.split('\n')
-            Boolean flag = false;
-            for (String line in strs) {
-                if (line.contains("ttl_cache_size")) {
-                    if (line.startsWith("#")) {
-                        continue
-                    }
-                    def i = line.indexOf(' ')
-                    ttl_cache_size = line.substring(i).toLong()
-                    flag = true
-                    break
-                }
-            }
-            assertTrue(flag)
+            ttl_cache_size = getMetricSumFromBody(body, "file_cache_ttl_cache_size")
+            logger.info("source ttl cache size=${ttl_cache_size}")
+            assertTrue(ttl_cache_size > 0, "source ttl cache size should be > 0")
     }
 
     getMetricsMethod.call(ipList[1], brpcPortList[1]) {
         respCode, body ->
             assertEquals("${respCode}".toString(), "200")
-            String out = "${body}".toString()
-            def strs = out.split('\n')
-            Boolean flag = false;
-            for (String line in strs) {
-                if (line.contains("ttl_cache_size")) {
-                    if (line.startsWith("#")) {
-                        continue
-                    }
-                    def i = line.indexOf(' ')
-                    assertEquals(ttl_cache_size, line.substring(i).toLong())
-                    flag = true
-                    break
-                }
-            }
-            assertTrue(flag)
+            def targetTtlCacheSize = getMetricSumFromBody(body, "file_cache_ttl_cache_size")
+            logger.info("target ttl cache size=${targetTtlCacheSize}, source ttl cache size=${ttl_cache_size}")
+            assertEquals(ttl_cache_size, targetTtlCacheSize)
     }
 
     try {
@@ -245,20 +238,8 @@ suite("test_warm_up_compute_group") {
     getMetricsMethod.call(ipList[1], brpcPortList[1]) {
         respCode, body ->
             assertEquals("${respCode}".toString(), "200")
-            String out = "${body}".toString()
-            def strs = out.split('\n')
-            Boolean flag = false;
-            for (String line in strs) {
-                if (line.contains("ttl_cache_size")) {
-                    if (line.startsWith("#")) {
-                        continue
-                    }
-                    def j = line.indexOf(' ')
-                    assertEquals(0, line.substring(j).toLong())
-                    flag = true
-                    break
-                }
-            }
-            assertTrue(flag)
+            def targetTtlCacheSize = getMetricSumFromBody(body, "file_cache_ttl_cache_size")
+            logger.info("target ttl cache size after clearing target cluster and rerunning warm up=${targetTtlCacheSize}")
+            assertEquals(0, targetTtlCacheSize)
     }
 }

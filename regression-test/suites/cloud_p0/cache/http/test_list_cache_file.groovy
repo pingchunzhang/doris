@@ -60,10 +60,10 @@ suite("test_list_cache_file") {
 
     sql "insert into user select number, cast(rand() as varchar(32)) from numbers(\"number\"=\"1000000\")"
     sql "sync"
-    //trigger be sync_rowsets
     sql "select count(*) from user"
+    sql "select sum(length(name)) from user"
 
-    Thread.sleep(50000)
+    Thread.sleep(10000)
 
     def get_tablets = { String tbl_name ->
         def res = sql "show tablets from ${tbl_name}"
@@ -83,8 +83,10 @@ suite("test_list_cache_file") {
             check {respCode, body ->
                 assertEquals(respCode, 200)
                 var map = parseJson(body)
+                logger.info("compaction show result for tablet ${tablet_id}: ${map}")
                 for (final def line in map.get("rowsets")) {
                     var tokens = line.toString().split(" ")
+                    assertTrue(tokens.size() > 4, "Unexpected rowset format for tablet ${tablet_id}: ${line}")
                     ret.add(tokens[4])
                 }
             }
@@ -93,53 +95,89 @@ suite("test_list_cache_file") {
     }
 
     var tablets = get_tablets("user")
+    assertTrue(!tablets.isEmpty(), "No tablets found for table user")
     var rowsets = get_rowsets(tablets.get(0))
+    assertTrue(!rowsets.isEmpty(), "No rowsets found for tablet ${tablets.get(0)}")
     var segment_file = rowsets[rowsets.size() - 1] + "_0.dat"
+    logger.info("tablets=${tablets}, rowsets=${rowsets}, selected segment_file=${segment_file}")
 
-    def cacheResults = []
     def clearResults = []
 
-    // Check cache status on all backends
-    backendSockets.each { socket ->
+    def getListCacheEntries = { socket, cacheFile ->
+        def arr = []
         httpTest {
             endpoint ""
-            uri socket + "/api/file_cache?op=list_cache&value=" + segment_file
+            uri socket + "/api/file_cache?op=list_cache&value=" + cacheFile
             op "get"
             check {respCode, body ->
                 assertEquals(respCode, 200)
-                var arr = parseJson(body)
-                cacheResults.add(arr.size() > 0)
+                arr = parseJson(body)
             }
         }
+        logger.info("list_cache socket=${socket}, cacheFile=${cacheFile}, result=${arr}")
+        return arr
     }
-    assertTrue(cacheResults.any(), "At least one backend should have cache file")
+
+    def waitUntilAnyBackendHasCacheFile = { cacheFile, long timeoutMs = 60000L, long intervalMs = 5000L ->
+        def lastResults = [:]
+        long start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            boolean found = false
+            backendSockets.each { socket ->
+                def entries = getListCacheEntries(socket, cacheFile)
+                lastResults[socket] = entries.size()
+                if (entries.size() > 0) {
+                    found = true
+                }
+            }
+            logger.info("cache poll for ${cacheFile}: ${lastResults}")
+            if (found) {
+                return
+            }
+            sql "select sum(length(name)) from user"
+            sleep(intervalMs)
+        }
+        assertTrue(false, "At least one backend should have cache file, segment_file=${cacheFile}, rowsets=${rowsets}, results=${lastResults}")
+    }
+
+    def waitUntilAllBackendsClearCacheFile = { cacheFile, long timeoutMs = 30000L, long intervalMs = 3000L ->
+        def lastResults = [:]
+        long start = System.currentTimeMillis()
+        while (System.currentTimeMillis() - start < timeoutMs) {
+            boolean allCleared = true
+            backendSockets.each { socket ->
+                def entries = getListCacheEntries(socket, cacheFile)
+                lastResults[socket] = entries.size()
+                if (entries.size() > 0) {
+                    allCleared = false
+                }
+            }
+            logger.info("clear-cache poll for ${cacheFile}: ${lastResults}")
+            if (allCleared) {
+                return
+            }
+            sleep(intervalMs)
+        }
+        assertTrue(false, "Cache file should be cleared on all backends, segment_file=${cacheFile}, results=${lastResults}")
+    }
+
+    waitUntilAnyBackendHasCacheFile(segment_file)
 
     // Clear cache on all backends
     backendSockets.each { socket ->
         httpTest {
             endpoint ""
-            uri socket + "/api/file_cache?op=clear&value=" + segment_file
+            uri socket + "/api/file_cache?op=clear&value=" + segment_file + "&sync=true"
             op "get"
             check {respCode, body ->
                 assertEquals(respCode, 200, "clear local cache fail, maybe you can find something in respond: " + parseJson(body))
+                logger.info("clear cache response socket=${socket}, cacheFile=${segment_file}, body=${body}")
                 clearResults.add(true)
             }
         }
     }
     assertEquals(clearResults.size(), backendSockets.size(), "Failed to clear cache on some backends")
 
-    // Verify cache cleared on all backends
-    backendSockets.each { socket ->
-        httpTest {
-            endpoint ""
-            uri socket + "/api/file_cache?op=list_cache&value=" + segment_file
-            op "get"
-            check {respCode, body ->
-                assertEquals(respCode, 200)
-                var arr = parseJson(body)
-                assertTrue(arr.size() == 0, "local cache files should not greater than 0, because it has already clear")
-            }
-        }
-    }
+    waitUntilAllBackendsClearCacheFile(segment_file)
     }
 }
