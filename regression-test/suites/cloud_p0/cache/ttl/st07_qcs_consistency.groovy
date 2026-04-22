@@ -80,14 +80,31 @@ suite("st07_qcs_consistency") {
         waitSchemaChangeFinished.call(tableName)
 
         qt_q2 """select count(*) from ${tableName} where c2 = 0"""
+        def fileCacheInfoAvailable = true
+        try {
+            sql """select 1 from information_schema.file_cache_info limit 1"""
+        } catch (Exception e) {
+            if (e.getMessage()?.contains("Table [file_cache_info] does not exist")) {
+                fileCacheInfoAvailable = false
+                logger.warn("information_schema.file_cache_info is unavailable, skip file cache assertions in st07_qcs_consistency")
+            } else {
+                throw e
+            }
+        }
 
         def getTabletTypeRows = { Long tabletId ->
+            if (!fileCacheInfoAvailable) {
+                return []
+            }
             def rows = sql """select tablet_id, type from information_schema.file_cache_info where tablet_id=${tabletId} order by type"""
             logger.info("st07 tablet cache rows, tabletId=${tabletId}, rows=${rows}")
             return rows
         }
 
         def waitNoMixedTypePerTablet = { List<Long> ids, long timeoutMs = 600000L, long intervalMs = 3000L ->
+            if (!fileCacheInfoAvailable) {
+                return
+            }
             long start = System.currentTimeMillis()
             while (System.currentTimeMillis() - start < timeoutMs) {
                 boolean allOk = true

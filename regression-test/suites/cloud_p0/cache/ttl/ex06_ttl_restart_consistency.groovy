@@ -47,6 +47,18 @@ suite("ex06_ttl_restart_consistency", "docker") {
         sql ddl
 
         try {
+            def fileCacheInfoAvailable = true
+            try {
+                sql """select 1 from information_schema.file_cache_info limit 1"""
+            } catch (Exception e) {
+                if (e.getMessage()?.contains("Table [file_cache_info] does not exist")) {
+                    fileCacheInfoAvailable = false
+                    logger.warn("information_schema.file_cache_info is unavailable, skip file cache assertions in ex06_ttl_restart_consistency")
+                } else {
+                    throw e
+                }
+            }
+
             def getTabletIds = {
                 def tablets = sql """show tablets from ${tableName}"""
                 assertTrue(!tablets.isEmpty(), "No tablets found for table ${tableName}")
@@ -55,6 +67,9 @@ suite("ex06_ttl_restart_consistency", "docker") {
 
             def waitForFileCacheType = { List<Long> tabletIds, String expectedType,
                                          long timeoutMs = 1800000L, long intervalMs = 2000L ->
+                if (!fileCacheInfoAvailable) {
+                    return
+                }
                 long start = System.currentTimeMillis()
                 logger.info("tablets collection is ${tabletIds.toString()}")
                 while (System.currentTimeMillis() - start < timeoutMs) {

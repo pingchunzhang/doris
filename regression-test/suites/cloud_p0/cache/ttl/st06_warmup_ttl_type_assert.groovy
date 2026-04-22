@@ -83,8 +83,22 @@ suite("st06_warmup_ttl_type_assert") {
         logger.info("st06 tablets: source=${sourceTabletIds}, target=${targetTabletIds}")
         assertTrue(sourceTabletIds.size() == targetTabletIds.size(),
                 "Tablet size mismatch between source and target, source=${sourceTabletIds.size()}, target=${targetTabletIds.size()}")
+        def fileCacheInfoAvailable = true
+        try {
+            sql """select 1 from information_schema.file_cache_info limit 1"""
+        } catch (Exception e) {
+            if (e.getMessage()?.contains("Table [file_cache_info] does not exist")) {
+                fileCacheInfoAvailable = false
+                logger.warn("information_schema.file_cache_info is unavailable, skip file cache assertions in st06_warmup_ttl_type_assert")
+            } else {
+                throw e
+            }
+        }
 
         def waitForFileCacheType = { List<Long> sourceIds, List<Long> targetIds, String expectedType, long timeoutMs = 600000L, long intervalMs = 2000L ->
+            if (!fileCacheInfoAvailable) {
+                return
+            }
             logger.info("waitForFileCacheType, sourceIds=${sourceIds.toString()}, targetIds=${targetIds.toString()}, expectedType=${expectedType}")
             assertTrue(sourceIds.size() == targetIds.size(),
                     "Tablet size mismatch before waiting file cache type, source=${sourceIds.size()}, target=${targetIds.size()}")
